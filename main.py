@@ -19,7 +19,7 @@ from aiogram.types import (
 import random
 import asyncio
 import html
-from config import BOT_TOKEN
+BOT_TOKEN = os.getenv('API_TOKEN')
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -321,7 +321,7 @@ async def on_startup() -> None:
     logger.info("Бот запущен")
     
     
-    
+
 
 
 async def main() -> None:
