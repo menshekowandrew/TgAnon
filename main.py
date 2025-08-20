@@ -19,6 +19,7 @@ from aiogram.types import (
 import random
 import asyncio
 import html
+import os
 BOT_TOKEN = os.getenv('API_TOKEN')
 
 # Настройка логирования
