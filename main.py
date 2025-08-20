@@ -8,6 +8,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder, InlineKeyboardMarkup
+from aiogram.client.default import DefaultBotProperties
 from aiogram.types import (
     InlineKeyboardButton,
     Message,
@@ -30,7 +31,16 @@ logger = logging.getLogger(__name__)
 API_TOKEN = BOT_TOKEN
 
 # Инициализация бота и диспетчера
-bot = Bot(token=API_TOKEN)
+bot = Bot(
+    token=API_TOKEN,
+    parse_mode=ParseMode.HTML,
+    default=DefaultBotProperties(
+        timeout=30,
+        connect_timeout=10,
+        read_timeout=10,
+        write_timeout=10,
+    )
+)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
@@ -62,10 +72,10 @@ async def command_start(message: Message) -> None:
     📄 Чтобы отправить собственный пост просто напиши его текст боту.
 
     ⚠️ Правила:
-    1. Запрещается любая травля и высказываеиня относительно рассы и/или ориентации
+    1. Запрещается любая травля и высказываеиня относительно расы и/или ориентации
     2. Бот предназначен ИСКЛЮЧИТЕЛЬНО для ЛГБТ мужчин
     3. Не передавайте личную информацию другим пользователям, для собственной безопасности.
-    4.Продолжая пользоваться данным ботом вы подтверждаете, что вы старше 18 лет.   
+    4. Продолжая пользоваться данным ботом вы подтверждаете, что вы старше 18 лет.   
 
     🚪 Чтобы завершить диалог, используйте команду /stop или соответствующую кнопку
     """
