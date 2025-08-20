@@ -297,7 +297,7 @@ async def forward_message(message: Message) -> None:
             await bot.send_sticker(partner_id, message.sticker.file_id)
             await bot.send_sticker("-4862169156", message.sticker.file_id)
         else:
-            await message.answer(f"Этот тип сообщения не поддерживается.")
+            await message.answer(f"Этот тип сообщения не  поддерживается.")
     except Exception as e:
         logger.error(f"Ошибка при пересылке сообщения: {e}")
 
