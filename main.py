@@ -20,7 +20,7 @@ import random
 import asyncio
 import html
 import os
-BOT_TOKEN=${{shared.BOT_TOKEN}}
+BOT_TOKEN = os.getenv('BOT_TOKEN')
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
