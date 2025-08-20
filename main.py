@@ -48,6 +48,10 @@ not_post: Dict[int, str] = {}
 
 
 @dp.message(CommandStart(),ChatState.in_chat)
+async def statr_com(message: Message):
+    await message.answer(text="Меню не доступно в диалоге")
+
+@dp.message(CommandStart())
 async def command_start(message: Message) -> None:
     """Обработчик команды /start"""
     welcome_text = f"""
@@ -78,7 +82,7 @@ async def command_start(message: Message) -> None:
 async def start_search(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     Board = InlineKeyboardBuilder()
-    available_posts = [[uid,posts[uid]] for uid in posts.keys() if uid!=message.from_user.id]
+    available_posts = [[uid,posts[uid]] for uid in posts.keys() if (uid!=message.from_user.id and uid not in chats.keys())]
     if len(available_posts)<1:
         await message.answer(text="К сожалению для вас нет новых сообщений")
         return
@@ -95,6 +99,12 @@ async def default_handler(call: CallbackQuery):
     user = int(call.data.split("_")[1])
     posts[user] = not_post[user]
     await call.message.answer("Ваш пост успешно опубликован!")
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Смотреть посты 🔍"), KeyboardButton(text="Удалить пост 🗑️")]
+        ],
+        resize_keyboard=True
+    )
     await bot.delete_message(chat_id=call.from_user.id, message_id=call.message.message_id)
 
 
@@ -133,6 +143,24 @@ async def default_handler(call: CallbackQuery):
     )
 
 
+@dp.message(F.text == "Удалить пост 🗑️")
+async def stop_post(message: Message):
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Смотреть посты 🔍")
+
+             ]
+        ],
+        resize_keyboard=True
+    )
+    if message.from_user.id in posts.keys():
+        del posts[message.from_user.id]
+        await message.answer(text="Ваш пост удалён.",reply_markup=keyboard)
+    else:
+        await message.answer(text="У вас нет постов для удаления.", reply_markup=keyboard)
+
+
+
 @dp.message(Command("stop"))
 @dp.message(F.text == "Завершить диалог ❌")
 async def stop_chat(message: Message, state: FSMContext) -> None:
@@ -149,7 +177,12 @@ async def stop_chat(message: Message, state: FSMContext) -> None:
     del chats[user_id]
     if partner_id in chats:
         del chats[partner_id]
-
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Смотреть посты 🔍"), KeyboardButton(text="Удалить пост 🗑️")]
+        ],
+        resize_keyboard=True
+    )
     # Уведомляем пользователей
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
@@ -157,13 +190,29 @@ async def stop_chat(message: Message, state: FSMContext) -> None:
         ],
         resize_keyboard=True
     )
-
-    await bot.send_message(user_id, "Диалог завершен.", reply_markup=keyboard)
-    await bot.send_message(
-        partner_id,
-        "Собеседник покинул чат.",
-        reply_markup=keyboard
+    keyboard1 = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Смотреть посты 🔍"), KeyboardButton(text="Удалить пост 🗑️")]
+        ],
+        resize_keyboard=True
     )
+    if user_id in posts.keys():
+        await bot.send_message(user_id, "Диалог завершен.", reply_markup=keyboard1)
+    else:
+        await bot.send_message(user_id, "Диалог завершен.", reply_markup=keyboard)
+    if partner_id in posts.keys():
+        await bot.send_message(
+            partner_id,
+            "Собеседник покинул чат.",
+            reply_markup=keyboard1
+        )
+    else:
+        await bot.send_message(
+            partner_id,
+            "Собеседник покинул чат.",
+            reply_markup=keyboard
+        )
+
 
     await state.clear()
 
@@ -270,6 +319,9 @@ async def default_handler(message: Message) -> None:
 async def on_startup() -> None:
     """Действия при запуске бота"""
     logger.info("Бот запущен")
+    
+    
+    
 
 
 async def main() -> None:
