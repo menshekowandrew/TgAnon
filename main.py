@@ -8,7 +8,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder, InlineKeyboardMarkup
-from aiogram.client.default import DefaultBotProperties
 from aiogram.types import (
     InlineKeyboardButton,
     Message,
@@ -31,16 +30,7 @@ logger = logging.getLogger(__name__)
 API_TOKEN = BOT_TOKEN
 
 # Инициализация бота и диспетчера
-bot = Bot(
-    token=API_TOKEN,
-    parse_mode=ParseMode.HTML,
-    default=DefaultBotProperties(
-        timeout=30,
-        connect_timeout=10,
-        read_timeout=10,
-        write_timeout=10,
-    )
-)
+bot = Bot(token=API_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
@@ -309,10 +299,6 @@ async def forward_message(message: Message) -> None:
             await message.answer(f"Этот тип сообщения не поддерживается.")
     except Exception as e:
         logger.error(f"Ошибка при пересылке сообщения: {e}")
-        await message.answer(
-            "Не удалось отправить сообщение. Возможно, собеседник заблокировал бота."
-        )
-        await stop_chat(message)
 
 
 @dp.message()
