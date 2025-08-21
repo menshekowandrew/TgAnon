@@ -68,7 +68,7 @@ posts: Dict[int, str] = {}  # Опубликованные посты польз
 not_post: Dict[int, str] = {}  # Черновики постов перед публикацией
 recently_users: Dict[int, list] = {}  # История недавних взаимодействий
 post_creation_time: Dict[int, float] = {}  # Время создания постов (timestamp)
-user_ids: Set[int] = set()  # Множество всех пользователей бота
+user_ids = set()  # Множество всех пользователей бота
 
 
 @dp.message(Command("broadcast"))
