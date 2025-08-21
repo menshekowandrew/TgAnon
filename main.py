@@ -395,26 +395,6 @@ async def forward_message(message: Message) -> None:
         await message.answer("Не удалось отправить сообщение. Попробуйте позже.")
 
 
-@dp.message()
-async def default_handler(message: Message) -> None:
-    """Обработчик всех остальных сообщений - создание поста"""
-    try:
-        Board = InlineKeyboardBuilder()
-        ans = message.text
-        Board.add(InlineKeyboardButton(text="✉️ Опубликовать", callback_data=f"post_{message.from_user.id}"))
-        not_post[message.from_user.id] = ans
-
-        await message.answer(
-            f"📝 Ваш пост готов к публикации:\n\n{ans}\n\nНажмите '✉️ Опубликовать' чтобы разместить его на 5 часов",
-            reply_markup=Board.as_markup()
-        )
-        logger.info(f"Пользователь {message.from_user.id} создал черновик поста")
-
-    except Exception as e:
-        logger.error(f"Ошибка в default_handler: {e}\n{traceback.format_exc()}")
-        await message.answer("Ошибка при создании поста. Попробуйте позже.")
-
-
 @dp.message(Command("help"))
 async def help_command(message: Message) -> None:
     """Обработчик команды помощи"""
@@ -426,11 +406,6 @@ async def help_command(message: Message) -> None:
 /start - Начать работу с ботом
 /help - Показать эту справку
 /stop - Завершить текущий диалог
-
-<b>Кнопки меню:</b>
-• <b>Смотреть посты 🔍</b> - Просмотр доступных анкет
-• <b>Удалить пост 🗑️</b> - Удалить вашу анкету
-• <b>Завершить диалог ❌</b> - Закончить текущий чат
 
 <b>Как это работает:</b>
 1. Напишите текст - создается ваша анкета
@@ -455,6 +430,26 @@ async def help_command(message: Message) -> None:
     except Exception as e:
         logger.error(f"Ошибка в help_command: {e}\n{traceback.format_exc()}")
         await message.answer("Ошибка при показе справки")
+
+
+@dp.message()
+async def default_handler(message: Message) -> None:
+    """Обработчик всех остальных сообщений - создание поста"""
+    try:
+        Board = InlineKeyboardBuilder()
+        ans = message.text
+        Board.add(InlineKeyboardButton(text="✉️ Опубликовать", callback_data=f"post_{message.from_user.id}"))
+        not_post[message.from_user.id] = ans
+
+        await message.answer(
+            ans,
+            reply_markup=Board.as_markup()
+        )
+        logger.info(f"Пользователь {message.from_user.id} создал черновик поста")
+
+    except Exception as e:
+        logger.error(f"Ошибка в default_handler: {e}\n{traceback.format_exc()}")
+        await message.answer("Ошибка при создании поста. Попробуйте позже.")
 
 
 async def on_startup() -> None:
