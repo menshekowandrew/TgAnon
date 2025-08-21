@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 
 # Получаем токен бота из переменных окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
+ADMIN_KEY = os.getenv('ADMIN_KEY')
 
 # Настройка логирования
 logging.basicConfig(
@@ -57,6 +58,7 @@ except Exception as e:
 class ChatState(StatesGroup):
     waiting_for_partner = State()
     in_chat = State()
+    waiting_for_broadcast = State()
 
 
 # Хранилища данных
@@ -66,12 +68,116 @@ posts: Dict[int, str] = {}  # Опубликованные посты польз
 not_post: Dict[int, str] = {}  # Черновики постов перед публикацией
 recently_users: Dict[int, list] = {}  # История недавних взаимодействий
 post_creation_time: Dict[int, float] = {}  # Время создания постов (timestamp)
+user_ids: Set[int] = set()  # Множество всех пользователей бота
+
+
+@dp.message(Command("broadcast"))
+async def broadcast_command(message: Message, state: FSMContext):
+    """Секретная команда для начала рассылки"""
+    try:
+        # Проверяем секретный ключ (можно добавить проверку на admin ID)
+        if len(message.text.split()) < 2 or message.text.split()[1] != ADMIN_KEY:
+            await message.answer("❌ Неверный ключ доступа")
+            return
+
+        await message.answer(
+            "📢 Режим рассылки активирован. Отправьте сообщение для рассылки всем пользователям.\n\n"
+            "❌ Для отмены отправьте /cancel"
+        )
+        await state.set_state(ChatState.waiting_for_broadcast)
+        logger.info(f"Пользователь {message.from_user.id} активировал режим рассылки")
+
+    except Exception as e:
+        logger.error(f"Ошибка в broadcast_command: {e}\n{traceback.format_exc()}")
+        await message.answer("Ошибка при активации рассылки")
+
+
+@dp.message(Command("cancel"), ChatState.waiting_for_broadcast)
+async def cancel_broadcast(message: Message, state: FSMContext):
+    """Отмена рассылки"""
+    try:
+        await state.clear()
+        await message.answer("❌ Рассылка отменена")
+        logger.info(f"Пользователь {message.from_user.id} отменил рассылку")
+    except Exception as e:
+        logger.error(f"Ошибка в cancel_broadcast: {e}\n{traceback.format_exc()}")
+
+
+@dp.message(ChatState.waiting_for_broadcast)
+async def process_broadcast_message(message: Message, state: FSMContext):
+    """Обработка сообщения для рассылки"""
+    try:
+        broadcast_text = f"📢 <b>Важное сообщение от администрации:</b>\n\n{message.text}"
+
+        await message.answer("⏳ Начинаю рассылку... Это может занять некоторое время.")
+
+        success_count = 0
+        fail_count = 0
+        total_users = len(user_ids)
+
+        # Рассылаем сообщение всем пользователям
+        for user_id in list(user_ids):
+            try:
+                await bot.send_message(
+                    user_id,
+                    broadcast_text,
+                    parse_mode=ParseMode.HTML
+                )
+                success_count += 1
+                await asyncio.sleep(0.1)  # Задержка чтобы избежать flood
+            except Exception as e:
+                fail_count += 1
+                logger.warning(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+
+        # Формируем отчет
+        report_text = (
+            f"✅ Рассылка завершена!\n"
+            f"👥 Всего пользователей: {total_users}\n"
+            f"✅ Успешно отправлено: {success_count}\n"
+            f"❌ Не удалось отправить: {fail_count}\n"
+            f"📊 Процент доставки: {success_count / total_users * 100:.1f}%"
+        )
+
+        await message.answer(report_text)
+        await state.clear()
+
+        logger.info(f"Рассылка завершена. Успешно: {success_count}, Неудачно: {fail_count}")
+
+    except Exception as e:
+        logger.error(f"Ошибка в process_broadcast_message: {e}\n{traceback.format_exc()}")
+        await message.answer("Ошибка при рассылке")
+        await state.clear()
+
+
+@dp.message(Command("stats"))
+async def stats_command(message: Message):
+    """Команда для получения статистики"""
+    try:
+        if len(message.text.split()) < 2 or message.text.split()[1] != ADMIN_KEY:
+            await message.answer("❌ Неверный ключ доступа")
+            return
+
+        stats_text = (
+            f"📊 <b>Статистика бота:</b>\n\n"
+            f"👥 Всего пользователей: {len(user_ids)}\n"
+            f"💬 Активных чатов: {len(chats) // 2}\n"
+            f"📝 Активных постов: {len(posts)}\n"
+            f"⏰ Постов создано сегодня: {sum(1 for t in post_creation_time.values() if time.time() - t < 86400)}\n"
+            f"🔍 В поиске: {len(active_users)}"
+        )
+
+        await message.answer(stats_text, parse_mode=ParseMode.HTML)
+
+    except Exception as e:
+        logger.error(f"Ошибка в stats_command: {e}\n{traceback.format_exc()}")
+        await message.answer("Ошибка при получении статистики")
 
 
 @dp.message(CommandStart(), ChatState.in_chat)
 async def start_com(message: Message):
     """Обработчик команды /start во время чата"""
     try:
+        user_ids.add(message.from_user.id)
         await message.answer(text="Меню не доступно в диалоге")
     except Exception as e:
         logger.error(f"Ошибка в start_com: {e}")
@@ -82,6 +188,7 @@ async def start_com(message: Message):
 async def command_start(message: Message) -> None:
     """Обработчик команды /start - главное меню"""
     try:
+        user_ids.add(message.from_user.id)
         welcome_text = f"""
         👋 Привет! Это бот для анонимных чатов среди геев.
 
@@ -116,6 +223,7 @@ async def command_start(message: Message) -> None:
 async def start_search(message: Message, state: FSMContext) -> None:
     """Показ доступных постов для просмотра"""
     try:
+        user_ids.add(message.from_user.id)
         user_id = message.from_user.id
         Board = InlineKeyboardBuilder()
 
@@ -236,6 +344,7 @@ async def new_chat_handler(call: CallbackQuery):
 async def stop_post(message: Message):
     """Удаление поста пользователя"""
     try:
+        user_ids.add(message.from_user.id)
         user_id = message.from_user.id
         keyboard = ReplyKeyboardMarkup(
             keyboard=[
@@ -314,6 +423,7 @@ async def stop_chat_handler(call: CallbackQuery):
 async def stop_chat(message: Message, state: FSMContext) -> None:
     """Завершение текущего диалога"""
     try:
+        user_ids.add(message.from_user.id)
         user_id = message.from_user.id
 
         if user_id not in chats:
@@ -399,6 +509,7 @@ async def forward_message(message: Message) -> None:
 async def help_command(message: Message) -> None:
     """Обработчик команды помощи"""
     try:
+        user_ids.add(message.from_user.id)
         help_text = """
 📖 <b>Справка по командам бота</b>
 
