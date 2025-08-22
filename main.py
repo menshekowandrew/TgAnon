@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 
 # Получаем токен бота из переменных окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_KEY = os.getenv('ADMIN_KEY')
+ADMIN_KEY = os.getenv('ADMIN_KEY', 'secret123')
 
 # Настройка логирования
 logging.basicConfig(
@@ -69,6 +69,43 @@ not_post: Dict[int, str] = {}  # Черновики постов перед пу
 recently_users: Dict[int, list] = {}  # История недавних взаимодействий
 post_creation_time: Dict[int, float] = {}  # Время создания постов (timestamp)
 user_ids = set()  # Множество всех пользователей бота
+user_post_view_time: Dict[int, Dict[int, float]] = {}
+
+
+def can_show_post(viewer_id: int, post_owner_id: int) -> bool:
+    """Проверяет, можно ли показывать пост пользователю (не чаще 1 раза в 10 минут)"""
+    try:
+        current_time = time.time()
+
+        # Если пользователь никогда не видел этот пост - можно показывать
+        if viewer_id not in user_post_view_time:
+            return True
+
+        if post_owner_id not in user_post_view_time[viewer_id]:
+            return True
+
+        # Проверяем время последнего просмотра
+        last_view_time = user_post_view_time[viewer_id][post_owner_id]
+        time_since_last_view = current_time - last_view_time
+
+        # Можно показывать если прошло больше 10 минут (600 секунд)
+        return time_since_last_view >= 600
+
+    except Exception as e:
+        logger.error(f"Ошибка в can_show_post: {e}")
+        return True
+
+
+def record_post_view(viewer_id: int, post_owner_id: int):
+    """Записывает время просмотра поста пользователем"""
+    try:
+        if viewer_id not in user_post_view_time:
+            user_post_view_time[viewer_id] = {}
+
+        user_post_view_time[viewer_id][post_owner_id] = time.time()
+
+    except Exception as e:
+        logger.error(f"Ошибка в record_post_view: {e}")
 
 
 @dp.message(Command("broadcast"))
@@ -96,7 +133,7 @@ async def broadcast_command(message: Message, state: FSMContext):
 async def cancel_broadcast(message: Message, state: FSMContext):
     """Отмена рассылки"""
     try:
-        await state.clear()
+        await state.set_state(ChatState.in_chat)
         await message.answer("❌ Рассылка отменена")
         logger.info(f"Пользователь {message.from_user.id} отменил рассылку")
     except Exception as e:
@@ -107,7 +144,7 @@ async def cancel_broadcast(message: Message, state: FSMContext):
 async def process_broadcast_message(message: Message, state: FSMContext):
     """Обработка сообщения для рассылки"""
     try:
-        broadcast_text = f"📢 <b>Важное сообщение от администрации:</b>\n\n{message.text}"
+        broadcast_text = f"{message.text}"
 
         await message.answer("⏳ Начинаю рассылку... Это может занять некоторое время.")
 
@@ -139,18 +176,18 @@ async def process_broadcast_message(message: Message, state: FSMContext):
         )
 
         await message.answer(report_text)
-        await state.set_state(ChatState.in_chat())
+        await state.set_state(ChatState.in_chat)
 
         logger.info(f"Рассылка завершена. Успешно: {success_count}, Неудачно: {fail_count}")
 
     except Exception as e:
         logger.error(f"Ошибка в process_broadcast_message: {e}\n{traceback.format_exc()}")
         await message.answer("Ошибка при рассылке")
-        await state.set_state(ChatState.in_chat())
+        await state.set_state(ChatState.in_chat)
 
 
 @dp.message(Command("stats"))
-async def stats_command(message: Message):
+async def stats_command(message: Message, state: FSMContext):
     """Команда для получения статистики"""
     try:
         if len(message.text.split()) < 2 or message.text.split()[1] != ADMIN_KEY:
@@ -174,7 +211,7 @@ async def stats_command(message: Message):
 
 
 @dp.message(CommandStart(), ChatState.in_chat)
-async def start_com(message: Message):
+async def start_com(message: Message, state: FSMContext):
     """Обработчик команды /start во время чата"""
     try:
         user_ids.add(message.from_user.id)
@@ -185,7 +222,7 @@ async def start_com(message: Message):
 
 
 @dp.message(CommandStart())
-async def command_start(message: Message) -> None:
+async def command_start(message: Message, state: FSMContext) -> None:
     """Обработчик команды /start - главное меню"""
     try:
         user_ids.add(message.from_user.id)
@@ -227,26 +264,34 @@ async def start_search(message: Message, state: FSMContext) -> None:
         user_id = message.from_user.id
         Board = InlineKeyboardBuilder()
 
-        # Фильтрация доступных постов (только свежие менее 5 часов)
         current_time = time.time()
-        available_posts = [
-            [uid, posts[uid]] for uid in posts.keys()
-            if (uid != message.from_user.id and uid not in chats.keys())
-               and uid not in recently_users.get(message.from_user.id, [])
-               and (current_time - post_creation_time.get(uid, 0)) < 5 * 3600  # 5 часов в секундах
-        ]
+        available_posts = []
 
+        # Фильтрация доступных постов с учетом ограничений частоты
+        for uid in posts.keys():
+            # Базовые проверки
+            if (uid == user_id or uid in chats.keys() or
+                    uid in recently_users.get(user_id, [])):
+                continue
+
+            # Проверка времени жизни поста (5 часов)
+            if current_time - post_creation_time.get(uid, 0) >= 5 * 3600:
+                continue
+
+            # Проверка частоты показа (не чаще 1 раза в 10 минут)
+            if not can_show_post(user_id, uid):
+                continue
+
+            available_posts.append([uid, posts[uid]])
         if len(available_posts) < 1:
             await message.answer(text="К сожалению для вас нет новых сообщений")
             return
 
         show = random.choice(available_posts)
-        # Показываем сколько времени осталось до удаления поста
-        time_left = 5 * 3600 - (current_time - post_creation_time.get(show[0], current_time))
-        hours_left = int(time_left // 3600)
-        minutes_left = int((time_left % 3600) // 60)
+        post_owner_id = show[0]
 
-        time_info = f"\n\n⏰ Пост будет удален через {hours_left}ч {minutes_left}м"
+        # ЗАПИСЫВАЕМ ФАКТ ПРОСМОТРА - ЭТО ВАЖНО!
+        record_post_view(user_id, post_owner_id)
 
         Board.add(InlineKeyboardButton(text="💬Общаться", callback_data=f"new_chat.{show[0]}.{message.from_user.id}"))
         Board.add(InlineKeyboardButton(text="⚠️Жалоба", callback_data=f"warning.{show[0]}"))
@@ -260,7 +305,7 @@ async def start_search(message: Message, state: FSMContext) -> None:
 
 
 @dp.callback_query(lambda c: c.data.startswith("post_"))
-async def publish_post_handler(call: CallbackQuery):
+async def publish_post_handler(call: CallbackQuery, state: FSMContext):
     """Обработчик публикации поста"""
     try:
         user = int(call.data.split("_")[1])
@@ -285,9 +330,10 @@ async def publish_post_handler(call: CallbackQuery):
 
 
 @dp.callback_query(lambda c: c.data.startswith("new_chat"))
-async def new_chat_handler(call: CallbackQuery):
+async def new_chat_handler(call: CallbackQuery, state: FSMContext):
     """Обработчик создания нового чата"""
     try:
+        user_ids.add(call.from_user.id)
         user1_id = int(call.data.split(".")[1])
         user2_id = int(call.data.split(".")[2])
 
@@ -368,13 +414,14 @@ async def stop_post(message: Message):
 
 
 @dp.callback_query(lambda c: c.data.startswith("stop"))
-async def stop_chat_handler(call: CallbackQuery):
+async def stop_chat_handler(call: CallbackQuery, state: FSMContext):
     """Обработчик завершения чата через callback"""
     try:
         user_id = call.from_user.id
-
+        user_ids.add(call.from_user.id)
         if user_id not in chats:
             await call.answer("Вы не в чате")
+            await state.clear()
             return
 
         partner_id = chats[user_id]
@@ -428,6 +475,7 @@ async def stop_chat(message: Message, state: FSMContext) -> None:
 
         if user_id not in chats:
             await message.answer("Вы не в чате.", reply_markup=ReplyKeyboardRemove())
+            await state.clear()
             return
 
         Board = InlineKeyboardBuilder()
@@ -442,15 +490,14 @@ async def stop_chat(message: Message, state: FSMContext) -> None:
 
 
 @dp.message(ChatState.in_chat)
-async def forward_message(message: Message) -> None:
+async def forward_message(message: Message, state: FSMContext) -> None:
     """Пересылка сообщений между пользователями в чате"""
     try:
         user_id = message.from_user.id
-
+        user_ids.add(message.from_user.id)
         if user_id not in chats:
             await message.answer("Собеседник не найден.")
-            state.clear()
-            del chats[message.from_user.id]
+            await state.clear()
             return
 
         partner_id = chats[user_id]
@@ -569,27 +616,47 @@ async def on_startup() -> None:
     logger.info("Бот запущен и готов к работе")
 
 
-async def clean_old_posts():
-    """Периодическая очистка старых постов (старше 5 часов)"""
+async def clean_old_user_views():
+    """Очистка старых записей о просмотрах постов (старше 24 часов)"""
     try:
         while True:
             await asyncio.sleep(3600)  # Проверка каждый час
             current_time = time.time()
+            removed_count = 0
+
+            for viewer_id in list(user_post_view_time.keys()):
+                for post_owner_id in list(user_post_view_time[viewer_id].keys()):
+                    view_time = user_post_view_time[viewer_id][post_owner_id]
+                    if current_time - view_time > 86400:  # 24 часа
+                        del user_post_view_time[viewer_id][post_owner_id]
+                        removed_count += 1
+
+                # Удаляем пустые записи
+                if not user_post_view_time[viewer_id]:
+                    del user_post_view_time[viewer_id]
+
+            if removed_count > 0:
+                logger.info(f"Очищено {removed_count} старых записей о просмотрах постов")
+
+    except Exception as e:
+        logger.error(f"Ошибка в clean_old_user_views: {e}\n{traceback.format_exc()}")
+
+
+async def clean_old_posts():
+    """Периодическая очистка старых постов (старше 5 часов)"""
+    try:
+        while True:
+            await asyncio.sleep(3600)
+            current_time = time.time()
             old_posts_count = 0
 
-            # Находим и удаляем старые посты
-            users_to_remove = []
             for user_id, post_time in list(post_creation_time.items()):
-                if current_time - post_time > 5 * 3600:  # 5 часов
+                if current_time - post_time > 5 * 3600:
                     if user_id in posts:
                         del posts[user_id]
                         old_posts_count += 1
-                    users_to_remove.append(user_id)
-
-            # Удаляем записи о времени создания
-            for user_id in users_to_remove:
-                if user_id in post_creation_time:
-                    del post_creation_time[user_id]
+                    if user_id in post_creation_time:
+                        del post_creation_time[user_id]
 
             if old_posts_count > 0:
                 logger.info(f"Удалено {old_posts_count} старых постов (старше 5 часов)")
@@ -603,11 +670,21 @@ async def periodic_check():
     global recently_users
     try:
         while True:
-            await asyncio.sleep(10800)  # 3 часа
+            await asyncio.sleep(10800)
             recently_users = {}
             logger.info("История взаимодействий очищена")
     except Exception as e:
         logger.error(f"Ошибка в periodic_check: {e}\n{traceback.format_exc()}")
+
+
+async def backup_user_ids():
+    """Резервное копирование user_ids"""
+    try:
+        while True:
+            await asyncio.sleep(3600)
+            # logger.info(f"Текущее количество пользователей: {len(user_ids)}")
+    except Exception as e:
+        logger.error(f"Ошибка в backup_user_ids: {e}\n{traceback.format_exc()}")
 
 
 async def main() -> None:
@@ -617,6 +694,8 @@ async def main() -> None:
         # Запускаем периодические задачи
         asyncio.create_task(periodic_check())
         asyncio.create_task(clean_old_posts())
+        asyncio.create_task(clean_old_user_views())  # НОВАЯ задача
+        asyncio.create_task(backup_user_ids())
         # Запускаем бота
         await dp.start_polling(bot, on_startup=on_startup)
     except Exception as e:
