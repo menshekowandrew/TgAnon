@@ -139,14 +139,14 @@ async def process_broadcast_message(message: Message, state: FSMContext):
         )
 
         await message.answer(report_text)
-        await state.clear()
+        await state.set_state(ChatState.in_chat())
 
         logger.info(f"Рассылка завершена. Успешно: {success_count}, Неудачно: {fail_count}")
 
     except Exception as e:
         logger.error(f"Ошибка в process_broadcast_message: {e}\n{traceback.format_exc()}")
         await message.answer("Ошибка при рассылке")
-        await state.clear()
+        await state.set_state(ChatState.in_chat())
 
 
 @dp.message(Command("stats"))
@@ -251,7 +251,7 @@ async def start_search(message: Message, state: FSMContext) -> None:
         Board.add(InlineKeyboardButton(text="💬Общаться", callback_data=f"new_chat.{show[0]}.{message.from_user.id}"))
         Board.add(InlineKeyboardButton(text="⚠️Жалоба", callback_data=f"warning.{show[0]}"))
 
-        await message.answer(text=show[1] + time_info, reply_markup=Board.as_markup())
+        await message.answer(text=show[1], reply_markup=Board.as_markup())
         logger.info(f"Пользователь {user_id} просматривает пост {show[0]}")
 
     except Exception as e:
@@ -448,7 +448,9 @@ async def forward_message(message: Message) -> None:
         user_id = message.from_user.id
 
         if user_id not in chats:
-            await message.answer("Собеседник не найден. Используйте /stop и попробуйте снова.")
+            await message.answer("Собеседник не найден.")
+            state.clear()
+            del chats[message.from_user.id]
             return
 
         partner_id = chats[user_id]
@@ -502,7 +504,6 @@ async def forward_message(message: Message) -> None:
 
     except Exception as e:
         logger.error(f"Ошибка в forward_message: {e}\n{traceback.format_exc()}")
-        await message.answer("Не удалось отправить сообщение. Попробуйте позже.")
 
 
 @dp.message(Command("help"))
