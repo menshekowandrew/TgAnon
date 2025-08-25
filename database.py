@@ -144,30 +144,30 @@ class Database:
         # ---------- CHATS ----------
 
     def create_chat(self, user1_id: int, user2_id: int):
-        cursor = self.connection.cursor()
+        cursor = self.conn.cursor()
         cursor.execute("""
                INSERT INTO chats (user1_id, user2_id, is_active)
                VALUES (%s, %s, TRUE)
            """, (user1_id, user2_id))
-        self.connection.commit()
+        self.conn.commit()
         chat_id = cursor.lastrowid
         cursor.close()
         return chat_id
 
     def end_chat(self, user_id: int):
         """Закрыть чат по участнику"""
-        cursor = self.connection.cursor()
+        cursor = self.conn.cursor()
         cursor.execute("""
                UPDATE chats
                SET is_active = FALSE
                WHERE (user1_id = %s OR user2_id = %s) AND is_active = TRUE
            """, (user_id, user_id))
-        self.connection.commit()
+        self.conn.commit()
         cursor.close()
 
     def get_active_chat_partner(self, user_id: int):
         """Вернуть айди собеседника, если пользователь в активном чате"""
-        cursor = self.connection.cursor(dictionary=True)
+        cursor = self.conn.cursor(dictionary=True)
         cursor.execute("""
                SELECT user1_id, user2_id
                FROM chats
@@ -181,7 +181,7 @@ class Database:
         return None
 
     def count_active_chats(self):
-        cursor = self.connection.cursor()
+        cursor = self.conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM chats WHERE is_active = TRUE")
         count = cursor.fetchone()[0]
         cursor.close()
