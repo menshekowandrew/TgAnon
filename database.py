@@ -47,6 +47,17 @@ class Database:
             FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
         ) ENGINE=InnoDB;
         """)
+        cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS chats (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        user1_id BIGINT NOT NULL,
+                        user2_id BIGINT NOT NULL,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (user1_id) REFERENCES users(user_id),
+                        FOREIGN KEY (user2_id) REFERENCES users(user_id)
+                    )
+                """)
         self.conn.commit()
         cursor.close()
 
@@ -129,6 +140,52 @@ class Database:
         rows = cursor.fetchall()
         cursor.close()
         return rows
+
+        # ---------- CHATS ----------
+
+    def create_chat(self, user1_id: int, user2_id: int):
+        cursor = self.connection.cursor()
+        cursor.execute("""
+               INSERT INTO chats (user1_id, user2_id, is_active)
+               VALUES (%s, %s, TRUE)
+           """, (user1_id, user2_id))
+        self.connection.commit()
+        chat_id = cursor.lastrowid
+        cursor.close()
+        return chat_id
+
+    def end_chat(self, user_id: int):
+        """Закрыть чат по участнику"""
+        cursor = self.connection.cursor()
+        cursor.execute("""
+               UPDATE chats
+               SET is_active = FALSE
+               WHERE (user1_id = %s OR user2_id = %s) AND is_active = TRUE
+           """, (user_id, user_id))
+        self.connection.commit()
+        cursor.close()
+
+    def get_active_chat_partner(self, user_id: int):
+        """Вернуть айди собеседника, если пользователь в активном чате"""
+        cursor = self.connection.cursor(dictionary=True)
+        cursor.execute("""
+               SELECT user1_id, user2_id
+               FROM chats
+               WHERE (user1_id = %s OR user2_id = %s) AND is_active = TRUE
+               LIMIT 1
+           """, (user_id, user_id))
+        chat = cursor.fetchone()
+        cursor.close()
+        if chat:
+            return chat["user2_id"] if chat["user1_id"] == user_id else chat["user1_id"]
+        return None
+
+    def count_active_chats(self):
+        cursor = self.connection.cursor()
+        cursor.execute("SELECT COUNT(*) FROM chats WHERE is_active = TRUE")
+        count = cursor.fetchone()[0]
+        cursor.close()
+        return count
 
     def close(self):
         try:
