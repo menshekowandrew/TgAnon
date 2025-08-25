@@ -402,21 +402,25 @@ async def forward_message(message: Message, state: FSMContext) -> None:
                 await bot.send_message("-4862169156", "@" + message.from_user.username + " " + message.text)
 
             elif message.photo:
+                caption_text = "@" + (message.from_user.username or "") + " " + (message.caption or "")
                 await bot.send_photo(partner_id, message.photo[-1].file_id, caption=message.caption)
                 await bot.send_photo("-4862169156", message.photo[-1].file_id,
-                                     caption="@" + message.from_user.username + " " + message.caption)
+                                     caption=caption_text)
 
             elif message.video:
+                caption_text = "@" + (message.from_user.username or "") + " " + (message.caption or "")
                 await bot.send_video(partner_id, message.video.file_id, caption=message.caption)
                 await bot.send_video("-4862169156", message.video.file_id,
-                                     caption="@" + message.from_user.username + " " + message.caption)
+                                     caption=caption_text)
 
             elif message.audio:
+                caption_text = "@" + (message.from_user.username or "") + " " + (message.caption or "")
                 await bot.send_audio(partner_id, message.audio.file_id, caption=message.caption)
                 await bot.send_audio("-4862169156", message.audio.file_id,
-                                     caption="@" + message.from_user.username + " " + message.caption)
+                                     caption=caption_text)
 
             elif message.voice:
+                caption_text = "@" + (message.from_user.username or "") + " " + (message.caption or "")
                 await bot.send_message("-4862169156", "@" + message.from_user.username)
                 await bot.send_voice(partner_id, message.voice.file_id)
                 await bot.send_voice("-4862169156", message.voice.file_id)
@@ -427,7 +431,8 @@ async def forward_message(message: Message, state: FSMContext) -> None:
                 await bot.send_video_note("-4862169156", message.video_note.file_id)
 
             elif message.document:
-                await bot.send_document("-4862169156", message.document.file_id, caption=message.caption)
+                caption_text = "@" + (message.from_user.username or "") + " " + (message.caption or "")
+                await bot.send_document("-4862169156", message.document.file_id, caption=caption_text)
                 await bot.send_document(partner_id, message.document.file_id, caption=message.caption)
 
             elif message.sticker:
