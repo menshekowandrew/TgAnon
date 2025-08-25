@@ -23,7 +23,6 @@ import os
 import traceback
 import time
 from datetime import datetime, timedelta
-from storage_mysql import MySQLStorage
 from database import Database
 
 # ========== Config ==========
@@ -44,7 +43,7 @@ if not BOT_TOKEN:
 
 # Initialize bot, dp, db
 bot = Bot(token=BOT_TOKEN)
-storage = MySQLStorage()
+storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 db = Database()
 
@@ -255,48 +254,46 @@ async def publish_post_handler(call: CallbackQuery, state: FSMContext):
         await call.answer("Ошибка при публикации поста")
 
 @dp.callback_query(lambda c: c.data.startswith("new_chat"))
-async def new_chat_handler(call: CallbackQuery):
+async def new_chat_handler(call: CallbackQuery, state: FSMContext):
     try:
+        # callback format: new_chat.<user1>.<user2>
         parts = call.data.split(".")
         if len(parts) < 3:
             await call.answer("Неверные данные")
             return
-
         user1_id = int(parts[1])
         user2_id = int(parts[2])
 
-        # Добавляем пользователей в БД
+        # add users to DB (ensure present)
         db.add_user(user1_id, "", "")
         db.add_user(user2_id, "", "")
 
-        # Обновляем недавно общавшихся
+        # update recent interactions
         recently_users.setdefault(user1_id, []).append(user2_id)
         recently_users.setdefault(user2_id, []).append(user1_id)
 
-        # Создаём чат в БД
+        # create in-memory chat pairing
         db.create_chat(user1_id, user2_id)
 
-        # Меняем состояние FSM через storage
-        key1 = StorageKey(bot_id=bot.id, chat_id=user1_id, user_id=user1_id)
-        key2 = StorageKey(bot_id=bot.id, chat_id=user2_id, user_id=user2_id)
-        await dp.storage.set_state(key1, ChatState.in_chat)
-        await dp.storage.set_state(key2, ChatState.in_chat)
+        # set FSM states for both (create contexts)
+        state1 = FSMContext(storage=storage, key=StorageKey(chat_id=user1_id, user_id=user1_id, bot_id=bot.id))
+        state2 = FSMContext(storage=storage, key=StorageKey(chat_id=user2_id, user_id=user2_id, bot_id=bot.id))
+        await state1.set_state(ChatState.in_chat)
+        await state2.set_state(ChatState.in_chat)
 
-        # Клавиатуры
         keyboard = ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text="Завершить диалог ❌")]],
             resize_keyboard=True
         )
 
-        await safe_send(user1_id, "💬 Собеседник присоединился к чату! Все сообщения будут пересылаться анонимно.", reply_markup=keyboard)
-        await safe_send(user2_id, "💬 Вы присоединились к чату! Все сообщения будут пересылаться анонимно.", reply_markup=keyboard)
+        await safe_send(user1_id, "💬 Собеседник присоединился к чату! Все ваши сообщения будут анонимно пересылаться.\nЕсли вы хотите закончить диалог нажмите /stop", reply_markup=keyboard)
+        await safe_send(user2_id, "💬 Вы присоединились к чату! Все ваши сообщения будут анонимно пересылаться.\nЕсли вы хотите закончить диалог нажмите /stop", reply_markup=keyboard)
 
         logger.info(f"Chat created between {user1_id} and {user2_id}")
         await call.answer()
     except Exception as e:
         logger.error(f"new_chat_handler error: {e}\n{traceback.format_exc()}")
         await call.answer("Ошибка при создании чата")
-
 
 @dp.message(F.text == "Удалить пост 🗑️")
 async def stop_post(message: Message):
@@ -315,42 +312,53 @@ async def stop_post(message: Message):
         logger.error(f"stop_post error: {e}\n{traceback.format_exc()}")
         await message.answer("Ошибка при удалении поста")
 
-@dp.callback_query(lambda c: c.data == "stop")
-async def stop_chat_handler(call: CallbackQuery):
+@dp.callback_query(lambda c: c.data.startswith("stop"))
+async def stop_chat_handler(call: CallbackQuery, state: FSMContext):
     try:
         user_id = call.from_user.id
         partner_id = db.get_active_chat_partner(user_id)
 
         if not partner_id:
             await call.answer("Вы не в чате")
-            key = StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id)
-            await dp.storage.clear(key)
+            await state.clear()
             return
 
-        # Завершаем чат в БД
+        # remove chat pairs
         db.end_chat(user_id)
 
-        # Клавиатуры
-        kb_user = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Смотреть посты 🔍")]], resize_keyboard=True)
-        kb_user_post = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Смотреть посты 🔍"), KeyboardButton(text="Удалить пост 🗑️")]], resize_keyboard=True)
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="Смотреть посты 🔍")]],
+            resize_keyboard=True
+        )
+        keyboard1 = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="Смотреть посты 🔍"), KeyboardButton(text="Удалить пост 🗑️")]],
+            resize_keyboard=True
+        )
 
-        # Отправляем уведомления
-        await safe_send(user_id, "✅ Диалог завершен.", reply_markup=kb_user_post if db.get_post(user_id) else kb_user)
-        await safe_send(partner_id, "❌ Собеседник покинул чат.", reply_markup=kb_user_post if db.get_post(partner_id) else kb_user)
+        # notify both
+        if db.get_post(user_id):
+            await safe_send(user_id, "✅ Диалог завершен.", reply_markup=keyboard1)
+        else:
+            await safe_send(user_id, "✅ Диалог завершен.", reply_markup=keyboard)
 
-        # Очищаем FSM состояния
-        key_user = StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id)
-        key_partner = StorageKey(bot_id=bot.id, chat_id=partner_id, user_id=partner_id)
-        await dp.storage.clear(key_user)
-        await dp.storage.clear(key_partner)
+        if db.get_post(partner_id):
+            await safe_send(partner_id, "❌ Собеседник покинул чат.", reply_markup=keyboard1)
+        else:
+            await safe_send(partner_id, "❌ Собеседник покинул чат.", reply_markup=keyboard)
 
+        # clear FSM states
+        storage = dp.storage
+        await state.clear()
+        partner_state = FSMContext(
+            storage=dp.storage,
+            key=StorageKey(chat_id=partner_id, user_id=partner_id, bot_id=bot.id)
+        )
+        await partner_state.clear()
         logger.info(f"Chat between {user_id} and {partner_id} ended")
         await call.answer("Диалог завершен")
     except Exception as e:
         logger.error(f"stop_chat_handler error: {e}\n{traceback.format_exc()}")
         await call.answer("Ошибка при завершении чата")
-
-
 
 @dp.message(Command("stop"))
 @dp.message(F.text == "Завершить диалог ❌")
@@ -378,13 +386,12 @@ async def forward_message(message: Message, state: FSMContext) -> None:
             user_id = message.from_user.id
             partner_id = db.get_active_chat_partner(user_id)
 
-            if not partner_id:
+            if not db.get_active_chat_partner(user_id):
                 await message.answer("Собеседник не найден.")
                 await state.clear()
                 return
 
-            await asyncio.sleep(0.1)  # защита от flood
-
+            # Пересылаем разные типы контента
             if not db.get_active_chat_partner(user_id):
                 await message.answer("Собеседник не найден.")
                 await state.clear()
@@ -396,19 +403,22 @@ async def forward_message(message: Message, state: FSMContext) -> None:
             # Пересылаем разные типы контента
             if message.text:
                 await bot.send_message(partner_id, message.text)
-                await bot.send_message("-4862169156", "@" + message.from_user.username +" " + message.text)
+                await bot.send_message("-4862169156", "@" + message.from_user.username + " " + message.text)
 
             elif message.photo:
                 await bot.send_photo(partner_id, message.photo[-1].file_id, caption=message.caption)
-                await bot.send_photo("-4862169156", message.photo[-1].file_id, caption="@" + message.from_user.username + " " + message.caption)
+                await bot.send_photo("-4862169156", message.photo[-1].file_id,
+                                     caption="@" + message.from_user.username + " " + message.caption)
 
             elif message.video:
                 await bot.send_video(partner_id, message.video.file_id, caption=message.caption)
-                await bot.send_video("-4862169156", message.video.file_id, caption="@" + message.from_user.username + " " + message.caption)
+                await bot.send_video("-4862169156", message.video.file_id,
+                                     caption="@" + message.from_user.username + " " + message.caption)
 
             elif message.audio:
                 await bot.send_audio(partner_id, message.audio.file_id, caption=message.caption)
-                await bot.send_audio("-4862169156", message.audio.file_id, caption="@" + message.from_user.username + " " +message.caption)
+                await bot.send_audio("-4862169156", message.audio.file_id,
+                                     caption="@" + message.from_user.username + " " + message.caption)
 
             elif message.voice:
                 await bot.send_message("-4862169156", "@" + message.from_user.username)
@@ -429,16 +439,11 @@ async def forward_message(message: Message, state: FSMContext) -> None:
                 await bot.send_sticker(partner_id, message.sticker.file_id)
                 await bot.send_sticker("-4862169156", message.sticker.file_id)
 
-            else:
-                await message.answer("Этот тип сообщения не поддерживается.")
-
         except Exception as e:
             logger.error(f"Ошибка в forward_message: {e}\n{traceback.format_exc()}")
-
-        else:
-            pass
     except Exception as e:
-        logger.error(f"forward_message error: {e}\n{traceback.format_exc()}")
+        logger.error(f"Ошибка в forward_message: {e}\n{traceback.format_exc()}")
+
 
 @dp.message(Command("help"))
 async def help_command(message: Message) -> None:
