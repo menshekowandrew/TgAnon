@@ -1,8 +1,8 @@
 import aiomysql
 import json
 from aiogram.fsm.storage.base import BaseStorage, StorageKey, StateType
-import os
 from urllib.parse import urlparse
+import os
 
 class MySQLStorage(BaseStorage):
     def __init__(self):
@@ -10,16 +10,11 @@ class MySQLStorage(BaseStorage):
         if not db_url:
             raise ValueError("DATABASE_URL is not set")
         parsed = urlparse(db_url)
-        user = parsed.username
-        password = parsed.password
-        host = parsed.hostname
-        port = parsed.port or 3306
-        db = parsed.path.lstrip("/")
-        self.host = host
-        self.user = user
-        self.password = password
-        self.db = db
-        self.port = port
+        self.user = parsed.username
+        self.password = parsed.password
+        self.host = parsed.hostname
+        self.port = parsed.port or 3306
+        self.db = parsed.path.lstrip("/")
         self.pool = None
 
     async def connect(self):
@@ -35,11 +30,12 @@ class MySQLStorage(BaseStorage):
             async with conn.cursor() as cur:
                 await cur.execute("""
                     CREATE TABLE IF NOT EXISTS fsm_storage (
+                        bot_id BIGINT NOT NULL,
                         user_id BIGINT NOT NULL,
                         chat_id BIGINT NOT NULL,
                         state VARCHAR(255),
                         data TEXT,
-                        PRIMARY KEY (user_id, chat_id)
+                        PRIMARY KEY (bot_id, user_id, chat_id)
                     )
                 """)
 
@@ -49,23 +45,21 @@ class MySQLStorage(BaseStorage):
             await self.pool.wait_closed()
 
     async def set_state(self, key: StorageKey, state: StateType = None):
+        state_str = state.state if state else None
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(
-                    """
-                    INSERT INTO fsm_storage (user_id, chat_id, state, data)
-                    VALUES (%s, %s, %s, %s)
+                await cur.execute("""
+                    INSERT INTO fsm_storage (bot_id, user_id, chat_id, state, data)
+                    VALUES (%s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE state=VALUES(state)
-                    """,
-                    (key.user_id, key.chat_id, state, "{}")
-                )
+                """, (key.bot_id, key.user_id, key.chat_id, state_str, "{}"))
 
     async def get_state(self, key: StorageKey):
         async with self.pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute(
-                    "SELECT state FROM fsm_storage WHERE user_id=%s AND chat_id=%s",
-                    (key.user_id, key.chat_id)
+                    "SELECT state FROM fsm_storage WHERE bot_id=%s AND user_id=%s AND chat_id=%s",
+                    (key.bot_id, key.user_id, key.chat_id)
                 )
                 row = await cur.fetchone()
                 return row["state"] if row else None
@@ -73,28 +67,26 @@ class MySQLStorage(BaseStorage):
     async def set_data(self, key: StorageKey, data: dict):
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(
-                    """
-                    UPDATE fsm_storage
-                    SET data=%s
-                    WHERE user_id=%s AND chat_id=%s
-                    """,
-                    (json.dumps(data), key.user_id, key.chat_id)
-                )
+                await cur.execute("""
+                    INSERT INTO fsm_storage (bot_id, user_id, chat_id, state, data)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE data=VALUES(data)
+                """, (key.bot_id, key.user_id, key.chat_id, None, json.dumps(data)))
 
     async def get_data(self, key: StorageKey):
         async with self.pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute(
-                    "SELECT data FROM fsm_storage WHERE user_id=%s AND chat_id=%s",
-                    (key.user_id, key.chat_id)
+                    "SELECT data FROM fsm_storage WHERE bot_id=%s AND user_id=%s AND chat_id=%s",
+                    (key.bot_id, key.user_id, key.chat_id)
                 )
                 row = await cur.fetchone()
                 return json.loads(row["data"]) if row and row["data"] else {}
 
-    async def clear_state(self, key: StorageKey):
+    async def clear(self, key: StorageKey):
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
-                    "DELETE FROM fsm_storage WHERE user_id=%s AND chat_id=%s",
-                    (key.user_id, key.chat_id))
+                    "DELETE FROM fsm_storage WHERE bot_id=%s AND user_id=%s AND chat_id=%s",
+                    (key.bot_id, key.user_id, key.chat_id)
+                )

@@ -261,26 +261,28 @@ async def new_chat_handler(call: CallbackQuery):
         if len(parts) < 3:
             await call.answer("Неверные данные")
             return
+
         user1_id = int(parts[1])
         user2_id = int(parts[2])
 
-        # добавляем пользователей в БД
+        # Добавляем пользователей в БД
         db.add_user(user1_id, "", "")
         db.add_user(user2_id, "", "")
 
-        # обновляем recent interactions
+        # Обновляем недавно общавшихся
         recently_users.setdefault(user1_id, []).append(user2_id)
         recently_users.setdefault(user2_id, []).append(user1_id)
 
-        # создаём чат в БД
+        # Создаём чат в БД
         db.create_chat(user1_id, user2_id)
 
-        # меняем состояние FSM через dp.storage
+        # Меняем состояние FSM через storage
         key1 = StorageKey(bot_id=bot.id, chat_id=user1_id, user_id=user1_id)
         key2 = StorageKey(bot_id=bot.id, chat_id=user2_id, user_id=user2_id)
         await dp.storage.set_state(key1, ChatState.in_chat)
         await dp.storage.set_state(key2, ChatState.in_chat)
 
+        # Клавиатуры
         keyboard = ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text="Завершить диалог ❌")]],
             resize_keyboard=True
@@ -313,7 +315,7 @@ async def stop_post(message: Message):
         logger.error(f"stop_post error: {e}\n{traceback.format_exc()}")
         await message.answer("Ошибка при удалении поста")
 
-@dp.callback_query(lambda c: c.data.startswith("stop"))
+@dp.callback_query(lambda c: c.data == "stop")
 async def stop_chat_handler(call: CallbackQuery):
     try:
         user_id = call.from_user.id
@@ -321,36 +323,22 @@ async def stop_chat_handler(call: CallbackQuery):
 
         if not partner_id:
             await call.answer("Вы не в чате")
-            # очищаем состояние пользователя
             key = StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id)
             await dp.storage.clear(key)
             return
 
-        # закрываем чат в БД
+        # Завершаем чат в БД
         db.end_chat(user_id)
 
-        # клавиатуры
-        keyboard_user = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="Смотреть посты 🔍")]],
-            resize_keyboard=True
-        )
-        keyboard_user_post = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="Смотреть посты 🔍"), KeyboardButton(text="Удалить пост 🗑️")]],
-            resize_keyboard=True
-        )
+        # Клавиатуры
+        kb_user = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Смотреть посты 🔍")]], resize_keyboard=True)
+        kb_user_post = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Смотреть посты 🔍"), KeyboardButton(text="Удалить пост 🗑️")]], resize_keyboard=True)
 
-        # уведомляем обоих участников
-        if db.get_post(user_id):
-            await safe_send(user_id, "✅ Диалог завершен.", reply_markup=keyboard_user_post)
-        else:
-            await safe_send(user_id, "✅ Диалог завершен.", reply_markup=keyboard_user)
+        # Отправляем уведомления
+        await safe_send(user_id, "✅ Диалог завершен.", reply_markup=kb_user_post if db.get_post(user_id) else kb_user)
+        await safe_send(partner_id, "❌ Собеседник покинул чат.", reply_markup=kb_user_post if db.get_post(partner_id) else kb_user)
 
-        if db.get_post(partner_id):
-            await safe_send(partner_id, "❌ Собеседник покинул чат.", reply_markup=keyboard_user_post)
-        else:
-            await safe_send(partner_id, "❌ Собеседник покинул чат.", reply_markup=keyboard_user)
-
-        # очищаем состояния FSM
+        # Очищаем FSM состояния
         key_user = StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id)
         key_partner = StorageKey(bot_id=bot.id, chat_id=partner_id, user_id=partner_id)
         await dp.storage.clear(key_user)
@@ -361,6 +349,7 @@ async def stop_chat_handler(call: CallbackQuery):
     except Exception as e:
         logger.error(f"stop_chat_handler error: {e}\n{traceback.format_exc()}")
         await call.answer("Ошибка при завершении чата")
+
 
 
 @dp.message(Command("stop"))
