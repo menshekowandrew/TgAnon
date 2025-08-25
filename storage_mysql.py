@@ -84,4 +84,4 @@ class MySQLStorage(BaseStorage):
             async with conn.cursor() as cur:
                 await cur.execute(
                     "DELETE FROM fsm_storage WHERE user_id=%s AND chat_id=%s",
-                    (key.user_id, key.chat_id)
+                    (key.user_id, key.chat_id))
