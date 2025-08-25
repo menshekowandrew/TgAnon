@@ -264,10 +264,6 @@ async def new_chat_handler(call: CallbackQuery, state: FSMContext):
         user1_id = int(parts[1])
         user2_id = int(parts[2])
 
-        # add users to DB (ensure present)
-        db.add_user(user1_id, "", "")
-        db.add_user(user2_id, "", "")
-
         # update recent interactions
         recently_users.setdefault(user1_id, []).append(user2_id)
         recently_users.setdefault(user2_id, []).append(user1_id)
