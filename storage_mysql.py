@@ -31,6 +31,17 @@ class MySQLStorage(BaseStorage):
             port=self.port,
             autocommit=True
         )
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("""
+                    CREATE TABLE IF NOT EXISTS fsm_storage (
+                        user_id BIGINT NOT NULL,
+                        chat_id BIGINT NOT NULL,
+                        state VARCHAR(255),
+                        data TEXT,
+                        PRIMARY KEY (user_id, chat_id)
+                    )
+                """)
 
     async def close(self):
         if self.pool:
