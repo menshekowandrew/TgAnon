@@ -535,7 +535,6 @@ async def on_startup():
 
 async def main() -> None:
     try:
-        await storage.connect()
         logger.info("Starting bot...")
         asyncio.create_task(periodic_check())
         asyncio.create_task(clean_old_posts())
