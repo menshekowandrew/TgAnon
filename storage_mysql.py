@@ -1,6 +1,7 @@
 import aiomysql
 import json
 from aiogram.fsm.storage.base import BaseStorage, StorageKey, StateType
+import os
 
 class MySQLStorage(BaseStorage):
     def __init__(self):
