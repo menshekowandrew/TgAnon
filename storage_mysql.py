@@ -8,7 +8,7 @@ class MySQLStorage(BaseStorage):
     def __init__(self):
         db_url = os.getenv("DATABASE_URL1")
         if not db_url:
-            raise ValueError("DATABASE_URL is not set")
+            raise ValueError("DATABASE_URL1 is not set")
         parsed = urlparse(db_url)
         self.user = parsed.username
         self.password = parsed.password
@@ -44,6 +44,7 @@ class MySQLStorage(BaseStorage):
             self.pool.close()
             await self.pool.wait_closed()
 
+    # ---------------- State ----------------
     async def set_state(self, key: StorageKey, state: StateType = None):
         state_str = state.state if state else None
         async with self.pool.acquire() as conn:
@@ -64,14 +65,17 @@ class MySQLStorage(BaseStorage):
                 row = await cur.fetchone()
                 return row["state"] if row else None
 
+    # ---------------- Data ----------------
     async def set_data(self, key: StorageKey, data: dict):
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
+                # Получаем текущее состояние, чтобы не затирать state
+                state = await self.get_state(key)
                 await cur.execute("""
                     INSERT INTO fsm_storage (bot_id, user_id, chat_id, state, data)
                     VALUES (%s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE data=VALUES(data)
-                """, (key.bot_id, key.user_id, key.chat_id, None, json.dumps(data)))
+                """, (key.bot_id, key.user_id, key.chat_id, state, json.dumps(data)))
 
     async def get_data(self, key: StorageKey):
         async with self.pool.acquire() as conn:
@@ -83,6 +87,7 @@ class MySQLStorage(BaseStorage):
                 row = await cur.fetchone()
                 return json.loads(row["data"]) if row and row["data"] else {}
 
+    # ---------------- Clear ----------------
     async def clear(self, key: StorageKey):
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cur:
