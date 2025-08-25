@@ -44,13 +44,7 @@ if not BOT_TOKEN:
 
 # Initialize bot, dp, db
 bot = Bot(token=BOT_TOKEN)
-storage = MySQLStorage(
-    host=os.getenv("MYSQL_HOST"),
-    user=os.getenv("MYSQL_USER"),
-    password=os.getenv("MYSQL_PASSWORD"),
-    db=os.getenv("MYSQL_DATABASE"),
-    port=int(os.getenv("MYSQL_PORT", 3306))
-)
+storage = MySQLStorage()
 dp = Dispatcher(storage=storage)
 db = Database()
 
