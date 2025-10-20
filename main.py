@@ -24,9 +24,9 @@ import traceback
 import time
 from datetime import datetime, timedelta
 from database import Database
-
+from config import BOT_TOKEN
 # ========== Config ==========
-BOT_TOKEN = os.getenv('BOT_TOKEN')
+BOT_TOKEN = BOT_TOKEN
 ADMIN_KEY = os.getenv('ADMIN_KEY', 'secret123')
 ADMIN_LOG_CHAT = os.getenv('ADMIN_LOG_CHAT', None)  # можно указать в .env, например -4862169156
 
@@ -195,7 +195,7 @@ async def start_search(message: Message, state: FSMContext) -> None:
     try:
         db.add_user(message.from_user.id, message.from_user.username or "", message.from_user.full_name or "")
         user_id = message.from_user.id
-        posts = db.get_active_posts(max_age_seconds=5*3600)
+        posts = db.get_active_posts(max_age_seconds=24*3600)
 
         available_posts = []
         for p in posts:
@@ -261,8 +261,24 @@ async def new_chat_handler(call: CallbackQuery, state: FSMContext):
         if len(parts) < 3:
             await call.answer("Неверные данные")
             return
-        user1_id = int(parts[1])
-        user2_id = int(parts[2])
+        user1_id = int(parts[1])  # автор поста
+        user2_id = int(parts[2])  # тот, кто нажал "Общаться"
+
+        # Проверяем активные чаты
+        active1 = db.get_active_chat_partner(user1_id)
+        active2 = db.get_active_chat_partner(user2_id)
+
+        if active2:
+            # Тот, кто пытается подключиться, уже в чате
+            await call.answer("❌ Сначала завершите свой текущий диалог, прежде чем начинать новый.", show_alert=True)
+            logger.info(f"Chat denied: {user2_id} tried to start new chat while already in chat")
+            return
+
+        if active1:
+            # Автор поста уже в чате
+            await call.answer("⚠️ Этот пользователь уже находится в другом диалоге. Попробуйте позже.", show_alert=True)
+            logger.info(f"Chat denied: target {user1_id} already in chat")
+            return
 
         # update recent interactions
         recently_users.setdefault(user1_id, []).append(user2_id)
@@ -457,7 +473,7 @@ async def help_command(message: Message) -> None:
 /start - Начать работу с ботом
 /help - Показать эту справку
 /stop - Завершить текущий диалог
-
++
 <b>Как это работает:</b>
 1. Напишите текст - создается ваша анкета
 2. Нажмите "✉️ Опубликовать" - публикуете анкету на 5 часов
@@ -505,9 +521,9 @@ async def clean_old_posts():
     try:
         while True:
             await asyncio.sleep(3600)
-            deleted = db.delete_old_posts(older_than_seconds=5*3600)
+            deleted = db.delete_old_posts(older_than_seconds=24*3600)
             if deleted:
-                logger.info(f"Deleted {deleted} old posts older than 5 hours")
+                logger.info(f"Deleted {deleted} old posts older than 24 hours")
     except Exception as e:
         logger.error(f"clean_old_posts error: {e}\n{traceback.format_exc()}")
 

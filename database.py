@@ -1,194 +1,230 @@
-# database.py
-import os
-from urllib.parse import urlparse
-import mysql.connector
-from mysql.connector import Error
-from datetime import datetime, timedelta
+import sqlite3
+import time
+from typing import List, Dict, Any, Optional
+
 
 class Database:
     def __init__(self):
-        db_url = os.getenv("DATABASE_URL")
-        if not db_url:
-            raise ValueError("DATABASE_URL is not set")
-
-        # Разбираем URL через urlparse (поддерживает разные форматы)
-        parsed = urlparse(db_url)
-        user = parsed.username
-        password = parsed.password
-        host = parsed.hostname
-        port = parsed.port or 3306
-        database = parsed.path.lstrip("/")
-
-        self.conn = mysql.connector.connect(
-            host=host,
-            user=user,
-            password=password,
-            database=database,
-            port=port,
-            autocommit=False
-        )
+        self.conn = sqlite3.connect('anon_chat.db', check_same_thread=False)
         self.create_tables()
 
     def create_tables(self):
         cursor = self.conn.cursor()
-        cursor.execute("""
+        # Таблица пользователей
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            username VARCHAR(255),
-            full_name VARCHAR(255),
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            full_name TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB;
-        """)
-        cursor.execute("""
+        )
+        ''')
+
+        # Таблица постов
+        cursor.execute('''
         CREATE TABLE IF NOT EXISTS posts (
-            user_id BIGINT PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
             text TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-        ) ENGINE=InnoDB;
-        """)
-        cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS chats (
-                        id INT AUTO_INCREMENT PRIMARY KEY,
-                        user1_id BIGINT NOT NULL,
-                        user2_id BIGINT NOT NULL,
-                        is_active BOOLEAN DEFAULT TRUE,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (user1_id) REFERENCES users(user_id),
-                        FOREIGN KEY (user2_id) REFERENCES users(user_id)
-                    )
-                """)
-        self.conn.commit()
-        cursor.close()
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )
+        ''')
 
-    # --- users ---
+        # Таблица активных чатов
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS chats (
+            user1_id INTEGER,
+            user2_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user1_id, user2_id),
+            FOREIGN KEY (user1_id) REFERENCES users (user_id),
+            FOREIGN KEY (user2_id) REFERENCES users (user_id)
+        )
+        ''')
+
+        cursor.execute('''
+                CREATE TABLE IF NOT EXISTS message_mirror (
+    sender_id INTEGER,
+    receiver_id INTEGER,
+    sender_message_id INTEGER,
+    receiver_message_id INTEGER,
+    PRIMARY KEY (sender_id, sender_message_id)
+);
+
+
+                ''')
+        self.conn.commit()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                user_id INTEGER PRIMARY KEY,
+                expires_at INTEGER,
+                permanent INTEGER DEFAULT 0
+            )
+            """)
+        self.conn.commit()
+
     def add_user(self, user_id: int, username: str, full_name: str):
         cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT INTO users (user_id, username, full_name)
-            VALUES (%s, %s, %s)
-            ON DUPLICATE KEY UPDATE username = VALUES(username), full_name = VALUES(full_name)
-        """, (user_id, username, full_name))
+        cursor.execute('''
+        INSERT OR IGNORE INTO users (user_id, username, full_name)
+        VALUES (?, ?, ?)
+        ''', (user_id, username, full_name))
         self.conn.commit()
-        cursor.close()
 
-    def get_all_users(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT user_id FROM users")
-        rows = cursor.fetchall()
-        cursor.close()
-        return [r[0] for r in rows]
-
-    # --- posts ---
     def add_post(self, user_id: int, text: str):
         cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT INTO posts (user_id, text)
-            VALUES (%s, %s)
-            ON DUPLICATE KEY UPDATE text = VALUES(text), created_at = CURRENT_TIMESTAMP
-        """, (user_id, text))
+        # Удаляем старый пост пользователя если есть
+        cursor.execute('DELETE FROM posts WHERE user_id = ?', (user_id,))
+        cursor.execute('''
+        INSERT INTO posts (user_id, text)
+        VALUES (?, ?)
+        ''', (user_id, text))
         self.conn.commit()
-        cursor.close()
 
-    def delete_post(self, user_id: int):
+    def get_post(self, user_id: int) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM posts WHERE user_id = %s", (user_id,))
-        deleted = cursor.rowcount
-        self.conn.commit()
-        cursor.close()
-        return deleted
-
-    def get_post(self, user_id: int):
-        cursor = self.conn.cursor(dictionary=True)
-        cursor.execute("SELECT user_id, text, created_at FROM posts WHERE user_id = %s", (user_id,))
+        cursor.execute('SELECT user_id, text, created_at FROM posts WHERE user_id = ?', (user_id,))
         row = cursor.fetchone()
-        cursor.close()
-        return row
+        if row:
+            return {'user_id': row[0], 'text': row[1], 'created_at': row[2]}
+        return None
 
-    def get_active_posts(self, max_age_seconds: int = 5 * 3600):
-        """
-        Возвращает посты, младше max_age_seconds
-        """
-        cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds)
-        cursor = self.conn.cursor(dictionary=True)
-        cursor.execute("SELECT user_id, text, created_at FROM posts WHERE created_at >= %s", (cutoff,))
-        rows = cursor.fetchall()
-        cursor.close()
-        return rows
-
-    def delete_old_posts(self, older_than_seconds: int = 5 * 3600):
-        cutoff = datetime.utcnow() - timedelta(seconds=older_than_seconds)
+    def get_posts_raw(self) -> List[Dict[str, Any]]:
         cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM posts WHERE created_at < %s", (cutoff,))
-        deleted = cursor.rowcount
+        cursor.execute('SELECT user_id, text, created_at FROM posts')
+        return [{'user_id': row[0], 'text': row[1], 'created_at': row[2]} for row in cursor.fetchall()]
+
+    def get_active_posts(self, max_age_seconds: int = 18000) -> List[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute('''
+        SELECT user_id, text, created_at 
+        FROM posts 
+        WHERE datetime(created_at) > datetime('now', ?)
+        ''', (f'-{max_age_seconds} seconds',))
+        return [{'user_id': row[0], 'text': row[1], 'created_at': row[2]} for row in cursor.fetchall()]
+
+    def delete_post(self, user_id: int) -> bool:
+        cursor = self.conn.cursor()
+        cursor.execute('DELETE FROM posts WHERE user_id = ?', (user_id,))
         self.conn.commit()
-        cursor.close()
-        return deleted
+        return cursor.rowcount > 0
 
-    def count_posts_since(self, seconds: int):
-        cutoff = datetime.utcnow() - timedelta(seconds=seconds)
+    def delete_old_posts(self, older_than_seconds: int = 18000) -> int:
         cursor = self.conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM posts WHERE created_at >= %s", (cutoff,))
-        cnt = cursor.fetchone()[0]
-        cursor.close()
-        return cnt
-
-    def get_posts_raw(self):
-        """Возвращает все посты (dictionary) — полезно для админов"""
-        cursor = self.conn.cursor(dictionary=True)
-        cursor.execute("SELECT user_id, text, created_at FROM posts")
-        rows = cursor.fetchall()
-        cursor.close()
-        return rows
-
-        # ---------- CHATS ----------
+        cursor.execute('''
+        DELETE FROM posts 
+        WHERE datetime(created_at) <= datetime('now', ?)
+        ''', (f'-{older_than_seconds} seconds',))
+        self.conn.commit()
+        return cursor.rowcount
 
     def create_chat(self, user1_id: int, user2_id: int):
         cursor = self.conn.cursor()
-        cursor.execute("""
-               INSERT INTO chats (user1_id, user2_id, is_active)
-               VALUES (%s, %s, TRUE)
-           """, (user1_id, user2_id))
+        cursor.execute('''
+        INSERT INTO chats (user1_id, user2_id)
+        VALUES (?, ?)
+        ''', (user1_id, user2_id))
         self.conn.commit()
-        chat_id = cursor.lastrowid
-        cursor.close()
-        return chat_id
 
-    def end_chat(self, user_id: int):
-        """Закрыть чат по участнику"""
+    def get_active_chat_partner(self, user_id: int) -> Optional[int]:
         cursor = self.conn.cursor()
-        cursor.execute("""
-               UPDATE chats
-               SET is_active = FALSE
-               WHERE (user1_id = %s OR user2_id = %s) AND is_active = TRUE
-           """, (user_id, user_id))
-        self.conn.commit()
-        cursor.close()
-
-    def get_active_chat_partner(self, user_id: int):
-        """Вернуть айди собеседника, если пользователь в активном чате"""
-        cursor = self.conn.cursor(dictionary=True)
-        cursor.execute("""
-               SELECT user1_id, user2_id
-               FROM chats
-               WHERE (user1_id = %s OR user2_id = %s) AND is_active = TRUE
-               LIMIT 1
-           """, (user_id, user_id))
-        chat = cursor.fetchone()
-        cursor.close()
-        if chat:
-            return chat["user2_id"] if chat["user1_id"] == user_id else chat["user1_id"]
+        cursor.execute('''
+        SELECT user1_id, user2_id FROM chats 
+        WHERE user1_id = ? OR user2_id = ?
+        ''', (user_id, user_id))
+        row = cursor.fetchone()
+        if row:
+            return row[1] if row[0] == user_id else row[0]
         return None
 
-    def count_active_chats(self):
+    def end_chat(self, user_id: int):
         cursor = self.conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM chats WHERE is_active = TRUE")
-        count = cursor.fetchone()[0]
-        cursor.close()
-        return count
+        cursor.execute('''
+        DELETE FROM chats 
+        WHERE user1_id = ? OR user2_id = ?
+        ''', (user_id, user_id))
+        self.conn.commit()
 
-    def close(self):
-        try:
-            self.conn.close()
-        except:
-            pass
+    def count_active_chats(self) -> int:
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM chats')
+        return cursor.fetchone()[0]
+
+    def get_all_users(self) -> List[int]:
+        cursor = self.conn.cursor()
+        cursor.execute('SELECT user_id FROM users')
+        return [row[0] for row in cursor.fetchall()]
+
+    def count_posts_since(self, seconds: int) -> int:
+        cursor = self.conn.cursor()
+        cursor.execute('''
+        SELECT COUNT(*) FROM posts 
+        WHERE datetime(created_at) > datetime('now', ?)
+        ''', (f'-{seconds} seconds',))
+        return cursor.fetchone()[0]
+
+    def clear_message_mirror_between(user1_id, user2_id):
+        conn = sqlite3.connect("database.db")
+        cur = conn.cursor()
+        cur.execute("""
+            DELETE FROM message_mirror 
+            WHERE (sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)
+        """, (user1_id, user2_id, user2_id, user1_id))
+        conn.commit()
+        conn.close()
+    def save_message_mirror(self, sender_id, receiver_id, sender_message_id, receiver_message_id):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO message_mirror
+            (sender_id, receiver_id, sender_message_id, receiver_message_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (sender_id, receiver_id, sender_message_id, receiver_message_id)
+        )
+        self.conn.commit()
+
+    def get_mirrored_message_id(self, receiver_id, sender_message_id):
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT receiver_message_id
+            FROM message_mirror
+            WHERE receiver_id = ? AND sender_message_id = ?
+            """,
+            (receiver_id, sender_message_id)
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def set_subscription(self, user_id: int, months: int = 0, permanent: bool = False):
+        import time
+
+        now = int(time.time())
+        if permanent:
+            expires_at = now + 100 * 365 * 24 * 3600  # фактически "навсегда"
+        else:
+            expires_at = now + months * 30 * 24 * 3600
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO subscriptions (user_id, expires_at, permanent)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET expires_at=?, permanent=?;
+        """, (user_id, expires_at, int(permanent), expires_at, int(permanent)))
+        self.conn.commit()
+
+    def has_active_subscription(self, user_id: int):
+        import time
+        now = int(time.time())
+        cursor = self.conn.cursor()
+        res = cursor.execute("""
+            SELECT expires_at, permanent FROM subscriptions WHERE user_id=?
+        """, (user_id,)).fetchone()
+        if not res:
+            return False
+        expires_at, permanent = res
+        if permanent:
+            return True
+        return expires_at > now
